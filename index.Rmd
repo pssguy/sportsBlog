@@ -1,0 +1,183 @@
+---
+title: "mytinyshinys - Sports Blog"
+author: "mytinyshinys"
+date: "March 5, 2016"
+output:
+  html_document:
+    fig_caption: yes
+    theme: journal
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+css: customBlog.css
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+
+```{r libraries, echo=TRUE, include= FALSE}
+# # libraries required
+library(shiny)
+library(shinydashboard)
+library(stattleshipR)
+library(dplyr)
+library(readr)
+library(stringr)
+library(plotly)
+
+```
+This is a series of short articles usually related to apps I develop for the [mytinyshinys site](https://mytinyshinys.shinyapps.io/dashboard/) focusing on non-soccer Sports.
+Commented out code can be shown or hidden by toggling buttons
+
+##  <span class="post">NBA - Gamelogs</span>
+*18th March 2016*
+
+
+A [recent article](http://blog.stattleship.com/will-steph-curry-hit-272-threes-before-reaching-600-attempts/?utm_content=buffer8d469&utm_medium=social&utm_source=twitter.com&utm_campaign=buffer).
+by [Mara Averick](https://twitter.com/dataandme) on Stephen Curry's record breaking three-point season prompted me to replicate one of her examples for a shiny app
+
+The data comes from the [Stattleship API](https://www.stattleship.com/)  which seems a great addition for sports data junkies. But get in fast as they will be charging soon!
+
+You will need to obtain your own token from Stattleship if you wish to copy and use code
+
+
+```{r 160318 data loading, echo=TRUE}
+
+teams <- read_csv("https://dl.dropboxusercontent.com/u/25945599/nbaTeams.csv")
+players <- read_csv("https://dl.dropboxusercontent.com/u/25945599/nbaPlayers.csv")
+
+players <- players %>% 
+  arrange(name)
+
+playerChoice <- players$slug
+names(playerChoice) <- players$name
+
+## enter own token if copying code
+#token <-set_token(<enter your token>)
+
+## set params
+sport <- "basketball" 
+league <- "nba"
+
+```
+```{r Stattleship token, echo=FALSE}
+token <-set_token('14954863fc861a855e8510512308dd38')
+
+```
+
+
+I have made some slight changes to Mara's code but, hopefully, the end product is the same. The key ss_get_result function is from the stattleshipR package    
+A selection can be made from all NBA players who have appeared so far in the 2015/6 season    
+Click button to create chart which will be based on current data
+
+```{r 160318 processing, echo=TRUE}
+
+
+## set inputs
+inputPanel(
+selectInput("player", label=NULL,playerChoice, selected="nba-stephen-curry"),
+      radioButtons("category", label=NULL, choices=c("FG","3P","FT"),inline=T),
+      actionButton("go","Get Player Data")
+)
+
+# processing based on input
+data <-eventReactive(input$go,{
+  
+  req(input$player)
+  name <- players[players$slug==input$player,]$name
+  
+  ep <- "game_logs"    
+  q_body <- list(player_id=input$player)
+  
+
+  nba <- ss_get_result(token=token,sport=sport, league=league, ep=ep, query=q_body, version=1, verbose=TRUE, walk=TRUE)
+  logs <- lapply(nba, function(x) x$game_logs)
+  games <- lapply(nba, function(x) x$games)
+  
+  
+  games_df <- tbl_df(rbindlist(games)) 
+  logs_df <- rbindlist(logs)
+
+  logs_df <- logs_df %>% 
+    filter(game_played == "TRUE")
+  
+  logs_df[is.na(logs_df )] <- 0
+  logs_df$court <- ifelse(logs_df$team_outcome == logs_df$home_team_outcome, "home", "away")
+  
+  # joining data.frames - alternative methods are available
+  logs_df$scoreline <- games_df[match(logs_df$game_id, games_df$id),]$scoreline
+  logs_df$winning_team_id <- games_df[match(logs_df$game_id, games_df$id),]$winning_team_id
+  logs_df$score_differential <- games_df[match(logs_df$game_id, games_df$id),]$score_differential
+  logs_df$game_started_at <- games_df[match(logs_df$game_id, games_df$id),]$started_at
+  logs_df$game_ended_at <- games_df[match(logs_df$game_id, games_df$id),]$ended_at
+  logs_df$game_slug <- games_df[match(logs_df$game_id, games_df$id),]$slug
+  
+  # ensuring data is chronologically correct
+ logs_df <- logs_df %>% 
+   arrange(game_ended_at)
+  
+  info=list(logs=logs_df,games=games_df,player=name)
+  return(info)
+  
+})
+
+## create  and output chart
+renderPlotly({
+  
+  # simplify code
+  df <- data()$logs
+
+  
+ # create basic chart based on category
+  if (input$category=="3P") {
+p <-  pc <- round(100*sum(df$three_pointers_made)/sum(df$three_pointers_attempted),1)
+  theTitle <- paste0(data()$player, " - 3 Pointers ",pc,"%")
+  
+  plot_ly(data()$logs, x = cumsum(three_pointers_attempted), y = cumsum(three_pointers_made), mode = "markers", hoverinfo = "text", group=team_outcome, 
+          text = paste(str_sub(game_started_at,1,10),"<br> Made:",three_pointers_made,"<br> Attempts:",three_pointers_attempted,"<br> Tot Made:",cumsum(three_pointers_made),"<br> Tot Attempts:",cumsum(three_pointers_attempted)))
+  } else if (input$category=="FG") {
+    p <-  pc <- round(100*sum(df$field_goals_made)/sum(df$field_goals_attempted),1)
+    theTitle <- paste0(data()$player, " - Field Goals ",pc,"%")
+    
+    plot_ly(data()$logs, x = cumsum(field_goals_attempted), y = cumsum(field_goals_made), mode = "markers", hoverinfo = "text", group=team_outcome, 
+            text = paste(str_sub(game_started_at,1,10),"<br> Made:",field_goals_made,"<br> Attempts:",field_goals_attempted,"<br> Tot Made:",cumsum(field_goals_made),"<br> Tot Attempts:",cumsum(field_goals_attempted)))
+  } else if (input$category=="FT") {
+    p <-  pc <- round(100*sum(df$free_throws_made)/sum(df$free_throws_attempted),1)
+    theTitle <- paste0(data()$player, " - Free Throws ",pc,"%")
+    
+    plot_ly(data()$logs, x = cumsum(free_throws_attempted), y = cumsum(free_throws_made), mode = "markers", hoverinfo = "text", group=team_outcome, 
+            text = paste(str_sub(game_started_at,1,10),"<br> Made:",free_throws_made,"<br> Attempts:",free_throws_attempted,"<br> Tot Made:",cumsum(free_throws_made),"<br> Tot Attempts:",cumsum(free_throws_attempted)))
+  }
+  # Then add layout
+  p %>%  
+    layout(hovermode = "closest",
+           xaxis=list(title="Cumulative Attempts"),
+           yaxis=list(title="Cumulative Made"),
+            title= theTitle, titlefont=list(size=16)
+           
+    ) %>% 
+    # hide plotly options
+    config(displayModeBar = F)
+  
+})
+
+```
+
+
+###  <span class="blogs">myTinyShiny blogs</span>
+
+
+- [English Premier League](https://mytinyshinys.shinyapps.io/premierBlog)
+- [Other Sports](https://mytinyshinys.shinyapps.io/sportsBlog)
+- [Socio-Economic](https://mytinyshinys.shinyapps.io/socioEconomicsBlog)
+- [Analytics](https://mytinyshinys.shinyapps.io/analyticsBlog)
+
+
+###  <span class="blogs">Associated mytinyshiny web sites</span>
+
+
+- [Cricket](https://mytinyshinys.shinyapps.io/cricket)
+- [MLB](https://mytinyshinys.shinyapps.io/mlbCharts)
+- [NBA](https://mytinyshinys.shinyapps.io/nbaCharts)
